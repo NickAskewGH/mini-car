@@ -8,7 +8,7 @@ radio.onReceivedValue(function (name, value) {
             MiniCar.motor(Motorlist.M2, Direction1.Backward, Math.map(value, 500, 1023, 0, 255))
         } else {
             MiniCar.motor(Motorlist.M1, Direction1.Forward, 0)
-            MiniCar.motor(Motorlist.M2, Direction1.Backward, 0)
+            MiniCar.motor(Motorlist.M2, Direction1.Forward, 0)
         }
     } else if (name == "y") {
         if (value < -250) {
@@ -20,14 +20,11 @@ radio.onReceivedValue(function (name, value) {
         }
     }
 })
-radio.setGroup(22)
+radio.setGroup(20)
 radio.setTransmitPower(7)
 basic.showIcon(IconNames.Diamond)
 let led_flip = true
-let motor_a = 0
-let motor_a_forward = 0
-let motor_b = 0
-let motor_b_forward = 0
+music.play(music.builtinPlayableSoundEffect(soundExpression.slide), music.PlaybackMode.InBackground)
 loops.everyInterval(1000, function () {
     led_flip = !(led_flip)
     if (led_flip) {
@@ -39,7 +36,4 @@ loops.everyInterval(1000, function () {
         MiniCar.led_rgb(LED_rgb_L_R.LED_R, LED_color.red1)
         basic.showIcon(IconNames.Diamond)
     }
-})
-basic.forever(function () {
-	
 })
