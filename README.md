@@ -1,14 +1,14 @@
 # micro:bit mini-car receiver
 
-A BBC micro:bit MakeCode project that receives tilt-control radio messages and drives a Keyestudio Mini Car.
+A BBC micro:bit MakeCode project that receives two-axis radio control messages and drives a Keyestudio Mini Car.
 
-This repository is the receiver/car counterpart to the separate `mini-car-remote` transmitter project. The receiver listens for named radio values `x` and `y`, maps them into steering/drive motor commands, and provides simple LED/sound status feedback.
+This repository is the receiver/car counterpart to the separate `mini-car-remote` transmitter project. The receiver listens for `x`, `y`, and `t` radio values, treats them as one timed direct-wheel command, and provides local duration enforcement plus simple LED/sound status feedback.
 
 The implementation dates from July 2023. This documentation describes the code currently present on `master`; it does not imply that the historical MakeCode target, Mini Car extension or hardware behaviour has been revalidated with current tooling.
 
 ## Startup
 
-The authoritative Blocks/TypeScript implementation:
+The authoritative TypeScript implementation:
 
 1. selects MakeCode radio group **20**;
 2. sets radio transmit power to **7**;
@@ -25,77 +25,48 @@ The project receives MakeCode named values:
 
 | Name | Meaning |
 | --- | --- |
-| `x` | Steering / differential-turn input from remote accelerometer X. |
-| `y` | Forward/backward drive input from remote accelerometer Y. |
+| `x` | Signed M1/left-wheel demand. |
+| `y` | Signed M2/right-wheel demand. |
+| `t` | Directive duration in milliseconds. |
 
-A compatible transmitter should use radio group **20** and send values in the same raw accelerometer range used by MakeCode.
+A compatible transmitter should use radio group **20** and send values in the range `-1023..1023`. Values can come from an accelerometer or a precise API.
 
-The companion `mini-car-remote` repository does exactly that, nominally every 50 ms per axis.
+The historical `mini-car-remote` sends accelerometer axes under the same names,
+but those values are not direct wheel demands. The direct-wheel receiver is
+intended for the HTTP bridge API; the handheld remote would require its own
+mixing update to remain intuitive.
 
-## Steering control (`x`)
+## Direct wheel control
 
-The receiver uses a steering dead zone of approximately `-500..500`.
+Positive values drive a motor Forward, negative values drive it Backward, and
+zero stops it. Each signed demand is clamped to `-1023..1023` and mapped directly
+to PWM magnitude `0..255`, preserving the finest control the protocol provides.
 
-### X < -500
+The receiver applies motor outputs only after all three parts of a fresh directive arrive:
 
-- M1: Backward
-- M2: Forward
-- speed magnitude mapped toward 255 as X approaches -1023
+```text
+M1 = x
+M2 = y
+duration = t
+```
 
-This produces a differential/pivot turn.
+This prevents the intermediate twitch that occurs when `x` is applied before
+the matching `y` and `t` packets. Curves and pivots are requested explicitly by
+choosing different signed wheel demands at the API.
 
-### X > 500
+## Local duration control
 
-- M1: Forward
-- M2: Backward
-- speed magnitude mapped from 0..255 as X moves from 500..1023
+`t` is clamped to `1..60000` ms. The timer starts on the micro:bit only after the
+complete directive has arrived and both motor commands have been written. A 1 ms
+local interval checks expiry and stops both motors. This excludes host, serial,
+and radio delivery latency from the requested movement duration.
 
-### -500 <= X <= 500
-
-Both motors are commanded to speed 0.
-
-## Drive control (`y`)
-
-The receiver uses a smaller drive threshold of approximately `-250..250`.
-
-### Y < -250
-
-Both motors run **Forward**, with speed mapped from 0 at -250 to 255 near -1023.
-
-### Y > 250
-
-Both motors run **Backward**, with speed mapped from 0 at 250 to 255 near 1023.
-
-### -250 <= Y <= 250
-
-The current implementation sends **no motor command** for Y in this neutral range.
-
-That means a prior forward/backward Y command can remain active until another command changes motor output. In practice, incoming X values in their neutral zone may stop both motors because the X handler explicitly writes speed 0, but there is no dedicated receiver-side neutral/failsafe state machine.
-
-## Interaction between X and Y messages
-
-The transmitter sends X and Y as separate radio messages. Each received message immediately updates motor state independently.
-
-That creates an important control characteristic:
-
-- an X packet can overwrite motor commands previously set by Y;
-- a Y packet can overwrite motor commands previously set by X;
-- there is no atomic combined steering+throttle sample or mixer.
-
-This is acceptable for a simple demo but is not equivalent to coordinated two-axis vehicle control.
+Incomplete directives are discarded after one second, and motors are stopped at
+startup. A new complete directive replaces the active one and restarts timing.
 
 ## Source authority
 
-The repository contains `main.blocks`, `main.ts`, and `main.py`.
-
-The Blocks and TypeScript representations agree on the main behaviour and configure **radio group 20**.
-
-`main.py` differs in two important ways:
-
-- it configures **radio group 22**;
-- in the X neutral branch it sets M2 direction to Backward at speed 0, while Blocks/TypeScript use Forward at speed 0.
-
-Because `pxt.json` declares `blocksprj` as the preferred editor and Blocks/TypeScript agree, this documentation treats **`main.blocks` + `main.ts` as the behavioural authority**.
+The repository contains `main.blocks`, `main.ts`, and `main.py`. The finer-grained stateful mixer is authored in `main.ts`, and `pxt.json` now selects `tsprj` as the preferred editor and excludes the stale Blocks/Python artifacts from compilation.
 
 ## Platform and dependency
 
@@ -103,7 +74,7 @@ Because `pxt.json` declares `blocksprj` as the preferred editor and Blocks/TypeS
 
 - MakeCode target: BBC micro:bit
 - target version: `6.0.15`
-- preferred editor: `blocksprj`
+- preferred editor: `tsprj`
 - dependencies: `core`, `radio`, `microphone`
 - Keyestudio Mini Car extension pinned to:
   `github:keyestudio2019/MiniCar#6a11b75a8fd87ccce69f3d02ed5c1666aaa25e1e`
@@ -118,7 +89,7 @@ To edit the project:
 2. Choose **Import** → **Import URL**.
 3. Enter the GitHub repository URL for `NickAskewGH/mini-car`.
 
-Prefer editing through MakeCode and review all generated representations after saving, especially the existing Python discrepancies.
+Use the JavaScript/TypeScript editor when importing the project. Switching to Blocks may not represent the stateful mixer faithfully.
 
 ## PXT command line
 
@@ -134,27 +105,36 @@ A compatible MakeCode/PXT toolchain must already be installed. The repository do
 
 `test.ts` is only a placeholder and provides no meaningful behavioural test coverage.
 
+### Flashing micro:bit V2
+
+`pxt build` produces a universal image and board-specific images. For a confirmed
+micro:bit V2, prefer the smaller CODAL image:
+
+```text
+built/mbcodal-binary.hex
+```
+
+The universal `built/binary.hex` also contains V2 code, but its larger transfer
+can take longer over the MICROBIT mass-storage interface.
+
+DAPLink error 504 means the USB file transfer timed out; it is not a runtime
+panic from this program. If it occurs, wait for the MICROBIT drive to remount,
+disconnect and reconnect the board, remove any stale `FAIL.TXT` by completing a
+successful flash, and copy `mbcodal-binary.hex` again. Do not start another copy
+while the activity LED is flashing. Repeated 5xx errors may require updating the
+board's DAPLink interface firmware.
+
 ## Safety considerations
 
-This code directly drives motors from radio input and lacks a robust receiver-side failsafe.
-
-Before using it on a powered vehicle, consider adding or externally enforcing:
-
-- timeout-based motor stop when radio input goes stale;
-- an explicit neutral/stop command;
-- combined/atomic steering+throttle state;
-- validation/clamping of received values;
-- startup-safe motor state;
-- emergency/manual stop;
-- maximum speed limits appropriate to the test environment.
+This code directly drives motors from radio input. It clamps inputs, stops at startup, mixes both axes in one control loop, and expires stale axes after 500 ms. These protections do not replace an independent emergency/manual stop or a maximum speed suitable for the test environment.
 
 Initial testing should be performed with wheels lifted or otherwise prevented from causing unintended motion.
 
 ## Repository structure
 
-- `main.blocks` — authoritative Blocks representation.
-- `main.ts` — matching TypeScript representation.
-- `main.py` — stale/inconsistent Python representation.
+- `main.ts` — authoritative, compiled TypeScript representation.
+- `main.blocks` — historical pre-mixer Blocks representation.
+- `main.py` — historical pre-mixer Python representation.
 - `pxt.json` — target/dependency/editor metadata.
 - `Makefile` — PXT build/deploy/test wrappers.
 - `test.ts` — placeholder test file.
@@ -165,11 +145,11 @@ Initial testing should be performed with wheels lifted or otherwise prevented fr
 
 - Experimental 2023 project with no current release/versioning policy.
 - No substantive automated tests.
-- No current hardware/toolchain revalidation evidence in the repository.
-- `main.py` disagrees with Blocks/TypeScript on radio group and one zero-speed direction.
-- No radio timeout/failsafe.
-- Y neutral range does not explicitly stop motors.
-- X and Y are processed as independent messages rather than a combined control state.
+- Builds successfully with `pxt-microbit` 9.1.1; proportional motor behavior
+  and timeout handling still require raised-wheel hardware validation.
+- Blocks/Python artifacts are stale and intentionally excluded from compilation.
+- The x/y/t packets are separate and have no sequence number; the receiver groups
+  the next fresh value of each name in arrival order.
 - No acknowledgement or telemetry back to the remote.
 - Motor mapping assumes the current physical motor orientation/wiring.
 - Status LEDs/sound are cosmetic and do not indicate radio health.

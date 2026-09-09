@@ -8,10 +8,8 @@
         "Mini Car": "github:keyestudio2019/MiniCar#6a11b75a8fd87ccce69f3d02ed5c1666aaa25e1e"
     },
     "files": [
-        "main.blocks",
         "main.ts",
-        "README.md",
-        "main.py"
+        "README.md"
     ],
     "testFiles": [
         "test.ts"
@@ -23,5 +21,5 @@
     "supportedTargets": [
         "microbit"
     ],
-    "preferredEditor": "blocksprj"
+    "preferredEditor": "tsprj"
 }
